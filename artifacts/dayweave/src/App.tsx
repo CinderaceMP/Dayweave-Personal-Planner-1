@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ChangeEvent, type FormEvent, type CSSProperties, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type CSSProperties, type ReactNode } from 'react';
 import { useLocation } from 'wouter';
 import {
   CalendarDays, Check, ChevronLeft, ChevronRight, CircleHelp, Clock3,
@@ -12,7 +12,7 @@ type Priority = 'Low' | 'Medium' | 'High';
 type Repeat = 'Never' | 'Daily' | 'Weekly' | 'Monthly';
 type Task = { id: string; title: string; dueDate: string; dueTime: string; endTime?: string; category: Category; priority: Priority; repeat: Repeat; completed: boolean; notes?: string; seriesId?: string };
 type Event = { id: string; title: string; date: string; startTime: string; endTime: string; category: Category; notes?: string };
-type Preferences = { theme: 'light' | 'dark'; accentColor: string; compactMode: boolean; largeText: boolean };
+type Preferences = { theme: 'light' | 'dark'; accentColor: string; compactMode: boolean; largeText: boolean; firstDayOfWeek: 0 | 1; timeFormat: '12' | '24' };
 type Proposal = { id: string; title: string; date: string; startTime: string; endTime: string; category: Category; notes: string };
 type Page = 'today' | 'calendar' | 'tasks' | 'settings';
 type ModalState = { kind: 'task' | 'event'; value?: Task | Event; defaultDate?: string } | null;
@@ -39,9 +39,10 @@ const NAV: { id: Page; label: string; icon: typeof House }[] = [
   { id: 'tasks', label: 'Tasks', icon: ListChecks },
   { id: 'settings', label: 'Settings', icon: Settings2 },
 ];
+const TimeFormatContext = createContext<'12' | '24'>('12');
 const pad = (n: number) => String(n).padStart(2, '0');
 const dateKey = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-const todayKey = () => dateKey(new Date());
+const todayKey = (date = new Date()) => dateKey(date);
 const addDays = (date: Date, amount: number) => { const next = new Date(date); next.setDate(next.getDate() + amount); return next; };
 const dateFromKey = (key: string) => { const [y, m, d] = key.split('-').map(Number); return new Date(y, m - 1, d); };
 const formatDate = (key: string, options: Intl.DateTimeFormatOptions = { weekday: 'long', month: 'long', day: 'numeric' }) => dateFromKey(key).toLocaleDateString('en-US', options);
@@ -58,6 +59,24 @@ const hslToHex = (value: string) => {
   };
   return `#${channel(0)}${channel(8)}${channel(4)}`;
 };
+const contrastTextFor = (hsl: string) => {
+  const hex = hslToHex(hsl);
+  const channels = [1, 3, 5].map(index => parseInt(hex.slice(index, index + 2), 16) / 255).map(value =>
+    value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4,
+  );
+  const luminance = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+  return luminance > 0.179 ? '231 20% 17%' : '40 43% 99%';
+};
+const accentForTheme = (accent: string, theme: Preferences['theme']) => {
+  if (theme !== 'dark') return accent;
+  const [hue, saturation, lightness] = accent.split(/[ %]+/).filter(Boolean).map(Number);
+  return `${hue} ${saturation}% ${Math.max(lightness, 63)}%`;
+};
+const normalizeTaskTitle = (title: string) => title.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+const sameTaskSlot = (first: Pick<Task, 'title' | 'dueDate' | 'dueTime'>, second: Pick<Task, 'title' | 'dueDate' | 'dueTime'>) =>
+  normalizeTaskTitle(first.title) === normalizeTaskTitle(second.title) &&
+  first.dueDate === second.dueDate &&
+  (first.dueTime || '') === (second.dueTime || '');
 const hexToHsl = (hex: string) => {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
   const g = parseInt(hex.slice(3, 5), 16) / 255;
@@ -90,10 +109,14 @@ const nextRepeatDate = (key: string, repeat: Repeat) => {
   }
   return key;
 };
-const timeLabel = (time: string) => {
+const timeLabel = (time: string, format: '12' | '24' = '12') => {
   if (!time) return '';
   const [h, m] = time.split(':').map(Number);
-  return new Date(2000, 0, 1, h, m).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return new Date(2000, 0, 1, h, m).toLocaleTimeString(format === '24' ? 'en-GB' : 'en-US', {
+    hour: format === '24' ? '2-digit' : 'numeric',
+    minute: '2-digit',
+    hourCycle: format === '24' ? 'h23' : 'h12',
+  });
 };
 
 function seedData() {
@@ -112,7 +135,7 @@ function seedData() {
       { id: 'seed-e3', title: 'A walk around the neighborhood', date: today, startTime: '15:30', endTime: '16:00', category: 'Wellbeing' as Category },
       { id: 'seed-e4', title: 'Coffee with Lena', date: tomorrow, startTime: '09:00', endTime: '10:00', category: 'Personal' as Category },
     ],
-    preferences: { theme: 'light' as const, accentColor: ACCENTS[0].value, compactMode: false, largeText: false },
+    preferences: { theme: 'light' as const, accentColor: ACCENTS[0].value, compactMode: false, largeText: false, firstDayOfWeek: 0 as const, timeFormat: '12' as const },
   };
 }
 
@@ -130,6 +153,8 @@ function loadData() {
             compactMode: false,
             largeText: false,
             ...parsed.preferences,
+            firstDayOfWeek: parsed.preferences.firstDayOfWeek === 1 ? 1 : 0,
+            timeFormat: parsed.preferences.timeFormat === '24' ? '24' : '12',
           },
         };
       }
@@ -153,11 +178,18 @@ function App() {
   const [selectedDate, setSelectedDate] = useState(todayKey());
   const [taskFilter, setTaskFilter] = useState('All');
   const [quickText, setQuickText] = useState('');
+  const [quickError, setQuickError] = useState('');
   const [plannerText, setPlannerText] = useState('');
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [approved, setApproved] = useState<string[]>([]);
   const [toast, setToast] = useState('');
   const [storageError, setStorageError] = useState('');
+  const [, setClockNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     try {
@@ -187,9 +219,10 @@ function App() {
   }, [mediaAssets]);
   useEffect(() => {
     document.documentElement.classList.toggle('dark', preferences.theme === 'dark');
-    document.documentElement.style.setProperty('--primary', preferences.accentColor);
-    document.documentElement.style.setProperty('--ring', preferences.accentColor);
-    document.documentElement.style.setProperty('--primary-foreground', preferences.theme === 'dark' ? '228 18% 12%' : '40 43% 99%');
+    const accent = accentForTheme(preferences.accentColor, preferences.theme);
+    document.documentElement.style.setProperty('--primary', accent);
+    document.documentElement.style.setProperty('--ring', accent);
+    document.documentElement.style.setProperty('--primary-foreground', contrastTextFor(accent));
   }, [preferences]);
   useEffect(() => {
     if (!toast) return;
@@ -245,12 +278,14 @@ function App() {
       showToast('Could not remove this media file');
     }
   };
-  const todayTasks = useMemo(() => tasks.filter(task => task.dueDate === todayKey()), [tasks]);
+  const currentDate = todayKey();
+  const todayTasks = useMemo(() => tasks.filter(task => task.dueDate === currentDate), [tasks, currentDate]);
+  const overdueTasks = useMemo(() => tasks.filter(task => task.dueDate < currentDate && !task.completed).sort((a, b) => a.dueDate.localeCompare(b.dueDate) || (a.dueTime || '99:99').localeCompare(b.dueTime || '99:99')), [tasks, currentDate]);
   const completedToday = todayTasks.filter(task => task.completed).length;
   const upcoming = useMemo(() => [
-    ...events.filter(event => event.date === todayKey()).map(event => ({ type: 'event' as const, time: event.startTime, value: event })),
+    ...events.filter(event => event.date === currentDate).map(event => ({ type: 'event' as const, time: event.startTime, value: event })),
     ...todayTasks.filter(task => !task.completed).map(task => ({ type: 'task' as const, time: task.dueTime || '23:59', value: task })),
-  ].sort((a, b) => a.time.localeCompare(b.time)), [events, todayTasks]);
+  ].sort((a, b) => a.time.localeCompare(b.time)), [events, todayTasks, currentDate]);
 
   const saveTask = (task: Task) => {
     setTasks(previous => previous.some(item => item.id === task.id) ? previous.map(item => item.id === task.id ? task : item) : [...previous, task]);
@@ -262,31 +297,39 @@ function App() {
     setModal(null);
     showToast(modal?.value ? 'Event updated' : 'Event added to your calendar');
   };
-  const toggleTask = (taskId: string) => setTasks(previous => {
-    const task = previous.find(item => item.id === taskId);
-    if (!task) return previous;
-    const completing = !task.completed;
-    const seriesId = task.seriesId ?? task.id;
-    let next = previous.map(item => item.id === taskId
-      ? { ...item, completed: completing, ...(item.repeat !== 'Never' ? { seriesId } : {}) }
-      : item);
-    if (completing && task.repeat !== 'Never') {
-      let dueDate = nextRepeatDate(task.dueDate, task.repeat);
-      while (dueDate <= todayKey()) dueDate = nextRepeatDate(dueDate, task.repeat);
-      const alreadyScheduled = next.some(item => item.seriesId === seriesId && item.dueDate === dueDate);
-      if (!alreadyScheduled) {
-        next = [...next, { ...task, id: id(), seriesId, dueDate, completed: false }];
+  const toggleTask = (taskId: string) => {
+    const target = tasks.find(item => item.id === taskId);
+    if (!target) return;
+    setTasks(previous => {
+      const task = previous.find(item => item.id === taskId);
+      if (!task) return previous;
+      const completing = !task.completed;
+      const seriesId = task.seriesId ?? task.id;
+      let next = previous.map(item => item.id === taskId
+        ? { ...item, completed: completing, ...(item.repeat !== 'Never' ? { seriesId } : {}) }
+        : item);
+      if (completing && task.repeat !== 'Never') {
+        let dueDate = nextRepeatDate(task.dueDate, task.repeat);
+        while (dueDate <= todayKey()) dueDate = nextRepeatDate(dueDate, task.repeat);
+        const alreadyScheduled = next.some(item => item.seriesId === seriesId && item.dueDate === dueDate);
+        if (!alreadyScheduled) {
+          next = [...next, { ...task, id: id(), seriesId, dueDate, completed: false }];
+        }
       }
-    }
-    return next;
-  });
+      return next;
+    });
+    showToast(target.completed ? 'Task reopened' : 'Task completed');
+  };
   const deleteTask = (taskId: string) => { setTasks(previous => previous.filter(task => task.id !== taskId)); showToast('Task removed'); };
   const deleteEvent = (eventId: string) => { setEvents(previous => previous.filter(event => event.id !== eventId)); showToast('Event removed'); };
   const quickAdd = (event: FormEvent) => {
     event.preventDefault();
-    if (!quickText.trim()) return;
-    setTasks(previous => [...previous, { id: id(), title: quickText.trim(), dueDate: todayKey(), dueTime: '', category: 'Personal', priority: 'Medium', repeat: 'Never', completed: false }]);
+    if (!quickText.trim()) { setQuickError('Enter a task name first.'); return; }
+    const task = { id: id(), title: quickText.trim(), dueDate: currentDate, dueTime: '', category: 'Personal' as Category, priority: 'Medium' as Priority, repeat: 'Never' as Repeat, completed: false };
+    if (tasks.some(item => sameTaskSlot(item, task))) { setQuickError('That task is already on today’s list.'); return; }
+    setTasks(previous => [...previous, task]);
     setQuickText('');
+    setQuickError('');
     showToast('Added to your checklist');
   };
 
@@ -333,6 +376,7 @@ function App() {
         </div>
       )}
       <CategoryMediaContext.Provider value={categoryArtwork}>
+      <TimeFormatContext.Provider value={preferences.timeFormat}>
       <aside className="desktop-rail">
         <div className="brand"><span className="brand-mark">{brandMarkUrl ? <img src={brandMarkUrl} alt="" /> : <CalendarDays size={18} />}</span>dayweave</div>
         <nav className="rail-nav" aria-label="Main navigation">
@@ -342,16 +386,17 @@ function App() {
       </aside>
       <main className="main-content">
         {storageError && <p className="storage-error" role="alert" data-testid="status-save-error">{storageError}</p>}
-        {currentPage === 'today' && <TodayPage tasks={todayTasks} upcoming={upcoming} completed={completedToday} onToggle={toggleTask} onQuickAdd={quickAdd} quickText={quickText} setQuickText={setQuickText} onAddTask={() => setModal({ kind: 'task' })} onEditTask={(task) => setModal({ kind: 'task', value: task })} onPlannerChange={setPlannerText} plannerText={plannerText} onGeneratePlan={generatePlan} proposals={proposals} approved={approved} setApproved={setApproved} onAddApproved={addApproved} />}
-        {currentPage === 'calendar' && <CalendarPage events={events} tasks={tasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} calendarView={calendarView} setCalendarView={setCalendarView} onAdd={() => setModal({ kind: 'event', defaultDate: selectedDate })} onEdit={(event) => setModal({ kind: 'event', value: event })} onDelete={deleteEvent} onToggleTask={toggleTask} onEditTask={(task) => setModal({ kind: 'task', value: task })} />}
+        {currentPage === 'today' && <TodayPage tasks={todayTasks} overdue={overdueTasks} currentDate={currentDate} now={new Date()} upcoming={upcoming} completed={completedToday} onToggle={toggleTask} onQuickAdd={quickAdd} quickText={quickText} setQuickText={value => { setQuickText(value); setQuickError(''); }} quickError={quickError} onAddTask={() => setModal({ kind: 'task' })} onEditTask={(task) => setModal({ kind: 'task', value: task })} onEditEvent={(event) => setModal({ kind: 'event', value: event })} onPlannerChange={setPlannerText} plannerText={plannerText} onGeneratePlan={generatePlan} proposals={proposals} approved={approved} setApproved={setApproved} onAddApproved={addApproved} />}
+        {currentPage === 'calendar' && <CalendarPage events={events} tasks={tasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} calendarView={calendarView} setCalendarView={setCalendarView} firstDayOfWeek={preferences.firstDayOfWeek} onAdd={() => setModal({ kind: 'event', defaultDate: selectedDate })} onEdit={(event) => setModal({ kind: 'event', value: event })} onDelete={deleteEvent} onToggleTask={toggleTask} onEditTask={(task) => setModal({ kind: 'task', value: task })} />}
         {currentPage === 'tasks' && <TasksPage tasks={tasks} filter={taskFilter} setFilter={setTaskFilter} onAdd={() => setModal({ kind: 'task' })} onToggle={toggleTask} onEdit={(task) => setModal({ kind: 'task', value: task })} onDelete={deleteTask} />}
         {currentPage === 'settings' && <SettingsPage preferences={preferences} onChange={setPreferences} mediaAssets={mediaAssets} mediaUrls={mediaUrls} mediaStorageMessage={mediaStorageMessage} onImportMedia={importMedia} onRemoveMedia={removeImportedMedia} />}
       </main>
       <nav className="bottom-nav" aria-label="Main navigation">
         {NAV.map(({ id: page, label, icon: Icon }) => <button key={page} className={`nav-item ${currentPage === page ? 'active' : ''}`} onClick={() => navigate(page)} data-testid={`nav-${page}`} aria-current={currentPage === page ? 'page' : undefined}><Icon /><span>{label}</span></button>)}
       </nav>
-      {modal && <EntryModal key={`${modal.kind}-${modal.value?.id ?? 'new'}`} modal={modal} onClose={() => setModal(null)} onSaveTask={saveTask} onSaveEvent={saveEvent} onDeleteTask={deleteTask} onDeleteEvent={deleteEvent} />}
+      {modal && <EntryModal key={`${modal.kind}-${modal.value?.id ?? 'new'}`} modal={modal} tasks={tasks} onClose={() => setModal(null)} onSaveTask={saveTask} onSaveEvent={saveEvent} onDeleteTask={deleteTask} onDeleteEvent={deleteEvent} />}
       {toast && <div className="toast-note" role="status" data-testid="status-toast">{toast}</div>}
+      </TimeFormatContext.Provider>
       </CategoryMediaContext.Provider>
     </div>
   );
@@ -359,10 +404,10 @@ function App() {
 
 type UpcomingItem = { type: 'event' | 'task'; time: string; value: Event | Task };
 
-function TodayPage({ tasks, upcoming, completed, onToggle, onQuickAdd, quickText, setQuickText, onAddTask, onEditTask, onPlannerChange, plannerText, onGeneratePlan, proposals, approved, setApproved, onAddApproved }: {
-  tasks: Task[]; upcoming: UpcomingItem[]; completed: number; onToggle: (id: string) => void; onQuickAdd: (event: FormEvent) => void; quickText: string; setQuickText: (value: string) => void; onAddTask: () => void; onEditTask: (task: Task) => void; onPlannerChange: (value: string) => void; plannerText: string; onGeneratePlan: () => void; proposals: Proposal[]; approved: string[]; setApproved: (ids: string[]) => void; onAddApproved: () => void;
-}) {
-  const now = new Date();
+function TodayPage({ tasks, overdue, currentDate, now, upcoming, completed, onToggle, onQuickAdd, quickText, setQuickText, quickError, onAddTask, onEditTask, onEditEvent, onPlannerChange, plannerText, onGeneratePlan, proposals, approved, setApproved, onAddApproved }: {
+  tasks: Task[]; overdue: Task[]; currentDate: string; now: Date; upcoming: UpcomingItem[]; completed: number; onToggle: (id: string) => void; onQuickAdd: (event: FormEvent) => void; quickText: string; setQuickText: (value: string) => void; quickError: string; onAddTask: () => void; onEditTask: (task: Task) => void; onEditEvent: (event: Event) => void; onPlannerChange: (value: string) => void; plannerText: string; onGeneratePlan: () => void; proposals: Proposal[]; approved: string[]; setApproved: (ids: string[]) => void; onAddApproved: () => void;
+ }) {
+  const timeFormat = useContext(TimeFormatContext);
   const greeting = now.getHours() < 12 ? 'Good morning' : now.getHours() < 17 ? 'Good afternoon' : 'Good evening';
   const progress = tasks.length ? Math.round(completed / tasks.length * 100) : 0;
   return (
@@ -374,24 +419,31 @@ function TodayPage({ tasks, upcoming, completed, onToggle, onQuickAdd, quickText
       <div className="today-layout">
         <div className="today-primary">
           <section className="panel greeting-card" data-testid="card-today-greeting">
-            <div className="greeting-date">{formatDate(todayKey())}</div>
+            <div className="greeting-date">{formatDate(currentDate)}</div>
             <h2 className="greeting-title">{greeting}, friend.</h2>
             <p className="greeting-copy">A fresh page, at your own pace. Make a little space for the things that matter.</p>
           </section>
-          <div className="section-heading"><h2>Your day</h2><span className="eyebrow" style={{ margin: 0 }}>{formatDate(todayKey(), { month: 'short', day: 'numeric' })}</span></div>
+          {overdue.length > 0 && <>
+            <div className="section-heading overdue-heading"><h2>Overdue</h2><span className="overdue-count">{overdue.length}</span></div>
+            <div className="item-list" data-testid="list-overdue-tasks">
+              {overdue.map(task => <TaskRow key={task.id} task={task} onToggle={onToggle} onEdit={() => onEditTask(task)} compact showDate />)}
+            </div>
+          </>}
+          <div className="section-heading"><h2>Your day</h2><span className="eyebrow" style={{ margin: 0 }}>{formatDate(currentDate, { month: 'short', day: 'numeric' })}</span></div>
           {upcoming.length > 0 ? <div className="item-list">
-            {upcoming.map(item => item.type === 'event' ? <ScheduleEvent key={`event-${item.value.id}`} event={item.value as Event} /> : <ScheduleTask key={`task-${item.value.id}`} task={item.value as Task} onToggle={onToggle} />)}
+            {upcoming.map(item => item.type === 'event' ? <ScheduleEvent key={`event-${item.value.id}`} event={item.value as Event} onEdit={onEditEvent} /> : <ScheduleTask key={`task-${item.value.id}`} task={item.value as Task} onToggle={onToggle} onEdit={onEditTask} />)}
           </div> : <EmptyState icon={<CalendarDays size={19} />} title="A little breathing room" description="Nothing on the schedule just yet. Add something when you’re ready." />}
           <form className="quick-add" onSubmit={onQuickAdd}>
-            <input aria-label="Add a task to today" data-testid="input-quick-add" placeholder="Add a small thing to your list…" value={quickText} onChange={event => setQuickText(event.target.value)} />
+            <input aria-label="Add a task to today" aria-invalid={Boolean(quickError)} aria-describedby={quickError ? 'quick-add-error' : undefined} data-testid="input-quick-add" placeholder="Add a small thing to your list…" value={quickText} onChange={event => setQuickText(event.target.value)} />
             <button className="primary-button" type="submit" aria-label="Add quick task" data-testid="button-quick-add"><Plus size={18} /><span>Add</span></button>
           </form>
+          {quickError && <p className="quick-add-error" id="quick-add-error" role="alert">{quickError}</p>}
         </div>
         <div className="today-secondary">
           <div className="section-heading"><h2>Checklist</h2><button className="quiet-button" onClick={onAddTask} data-testid="button-add-task">+ New task</button></div>
-          <div className="panel progress-card" data-testid="status-completion-progress">
+          <div className="panel progress-card" role="progressbar" aria-label="Today's task progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} aria-valuetext={`${completed} of ${tasks.length} tasks complete`} data-testid="status-completion-progress">
             <div className="progress-ring" style={{ '--progress': `${progress}%` } as CSSProperties}><span>{progress}%</span></div>
-            <div className="progress-copy"><strong>{completed} of {tasks.length} done</strong><small>{tasks.length && completed === tasks.length ? 'You made room for it all.' : 'One thing at a time is plenty.'}</small></div>
+            <div className="progress-copy"><strong>{completed} of {tasks.length} done</strong><small>{tasks.length === 0 ? 'Add a small task when you’re ready.' : completed === tasks.length ? 'You made room for it all.' : 'One thing at a time is plenty.'}</small></div>
           </div>
           <div className="item-list" style={{ marginTop: 10 }}>
             {tasks.length ? tasks.map(task => <TaskRow key={task.id} task={task} onToggle={onToggle} onEdit={onEditTask} compact />) : <EmptyState icon={<Check size={19} />} title="Your list is open" description="Add a task whenever something comes to mind." />}
@@ -404,7 +456,7 @@ function TodayPage({ tasks, upcoming, completed, onToggle, onQuickAdd, quickText
             <button className="secondary-button" onClick={onGeneratePlan} data-testid="button-generate-demo-plan"><Sparkles size={15} style={{ verticalAlign: 'middle', marginRight: 7 }} />Make a sample plan</button>
             {proposals.length > 0 && <div className="proposal" data-testid="list-demo-proposals">
               <div className="eyebrow" style={{ marginBottom: 4 }}>Sample suggestions · review before adding</div>
-              {proposals.map(proposal => <label className="proposal-row" key={proposal.id} data-testid={`proposal-${proposal.id}`}><input type="checkbox" checked={approved.includes(proposal.id)} onChange={event => setApproved(event.target.checked ? [...approved, proposal.id] : approved.filter(item => item !== proposal.id))} /><span>{proposal.title}</span><small>{timeLabel(proposal.startTime)}</small></label>)}
+              {proposals.map(proposal => <label className="proposal-row" key={proposal.id} data-testid={`proposal-${proposal.id}`}><input type="checkbox" checked={approved.includes(proposal.id)} onChange={event => setApproved(event.target.checked ? [...approved, proposal.id] : approved.filter(item => item !== proposal.id))} /><span>{proposal.title}</span><small>{timeLabel(proposal.startTime, timeFormat)}–{timeLabel(proposal.endTime, timeFormat)}</small></label>)}
               <button className="primary-button" style={{ width: '100%', marginTop: 8 }} onClick={onAddApproved} data-testid="button-approve-proposals"><CalendarPlus size={16} />Add selected to calendar</button>
             </div>}
           </section>
@@ -414,12 +466,14 @@ function TodayPage({ tasks, upcoming, completed, onToggle, onQuickAdd, quickText
   );
 }
 
-function ScheduleEvent({ event }: { event: Event }) {
-  return <div className="schedule-row" data-testid={`row-schedule-event-${event.id}`}><span className="time-label">{timeLabel(event.startTime)}</span><CategoryMark category={event.category} /><div className="item-main"><strong>{event.title}</strong><small>{event.category} · Event{event.endTime ? ` · until ${timeLabel(event.endTime)}` : ''}</small></div><CalendarDays size={16} color="hsl(var(--muted-foreground))" /></div>;
+function ScheduleEvent({ event, onEdit }: { event: Event; onEdit: (event: Event) => void }) {
+  const timeFormat = useContext(TimeFormatContext);
+  return <div className="schedule-row" data-testid={`row-schedule-event-${event.id}`}><span className="time-label">{timeLabel(event.startTime, timeFormat)}</span><CategoryMark category={event.category} /><div className="item-main"><button type="button" className="item-title-button" onClick={() => onEdit(event)} aria-label={`View or edit ${event.title}`}><strong>{event.title}</strong></button><small>{event.category} · Event{event.endTime ? ` · until ${timeLabel(event.endTime, timeFormat)}` : ''}</small></div><CalendarDays size={16} color="hsl(var(--muted-foreground))" aria-hidden="true" /></div>;
 }
 
 function ScheduleTask({ task, onToggle, onEdit }: { task: Task; onToggle: (id: string) => void; onEdit?: (task: Task) => void }) {
-  return <div className="schedule-row" data-testid={`row-schedule-task-${task.id}`}><span className="time-label">{timeLabel(task.dueTime) || 'Anytime'}</span><CategoryMark category={task.category} /><div className="item-main">{onEdit ? <button type="button" className="item-title-button" onClick={() => onEdit(task)} aria-label={`View or edit ${task.title}`}><strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong></button> : <strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong>}<small>{task.category} · Task{task.endTime ? ` · until ${timeLabel(task.endTime)}` : ''}</small></div><div className="row-actions"><button className={`check-button ${task.completed ? 'checked' : ''}`} onClick={() => onToggle(task.id)} aria-label={`${task.completed ? 'Mark incomplete' : 'Complete'} ${task.title}`} data-testid={`button-toggle-${task.id}`}>{task.completed && <Check size={15} />}</button>{onEdit && <button className="icon-button" onClick={() => onEdit(task)} aria-label={`Edit ${task.title}`} data-testid={`button-edit-${task.id}`}><Pencil size={15} /></button>}</div></div>;
+  const timeFormat = useContext(TimeFormatContext);
+  return <div className="schedule-row" data-testid={`row-schedule-task-${task.id}`}><span className="time-label">{timeLabel(task.dueTime, timeFormat) || 'Anytime'}</span><CategoryMark category={task.category} /><div className="item-main">{onEdit ? <button type="button" className="item-title-button" onClick={() => onEdit(task)} aria-label={`View or edit ${task.title}`}><strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong></button> : <strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong>}<small>{task.category} · Task{task.endTime ? ` · until ${timeLabel(task.endTime, timeFormat)}` : ''}</small></div><div className="row-actions"><button className={`check-button ${task.completed ? 'checked' : ''}`} onClick={() => onToggle(task.id)} aria-label={`${task.completed ? 'Mark incomplete' : 'Complete'} ${task.title}`} aria-pressed={task.completed} data-testid={`button-toggle-${task.id}`}>{task.completed && <Check size={15} />}</button>{onEdit && <button className="icon-button" onClick={() => onEdit(task)} aria-label={`Edit ${task.title}`} data-testid={`button-edit-${task.id}`}><Pencil size={15} /></button>}</div></div>;
 }
 
 function CategoryMark({ category }: { category: Category }) {
@@ -429,14 +483,15 @@ function CategoryMark({ category }: { category: Category }) {
     : <span className="category-mark" style={{ background: CATEGORY_COLORS[category] }} aria-hidden="true" />;
 }
 
-function TaskRow({ task, onToggle, onEdit, onDelete, compact = false }: { task: Task; onToggle: (id: string) => void; onEdit: (task: Task) => void; onDelete?: (id: string) => void; compact?: boolean }) {
+function TaskRow({ task, onToggle, onEdit, onDelete, compact = false, showDate = false }: { task: Task; onToggle: (id: string) => void; onEdit: (task: Task) => void; onDelete?: (id: string) => void; compact?: boolean; showDate?: boolean }) {
+  const timeFormat = useContext(TimeFormatContext);
   return <div className="task-row" data-testid={`row-task-${task.id}`}>
-    <button className={`check-button ${task.completed ? 'checked' : ''}`} onClick={() => onToggle(task.id)} aria-label={`${task.completed ? 'Mark incomplete' : 'Complete'} ${task.title}`} data-testid={`button-toggle-${task.id}`}>{task.completed && <Check size={15} />}</button>
+    <button className={`check-button ${task.completed ? 'checked' : ''}`} onClick={() => onToggle(task.id)} aria-label={`${task.completed ? 'Mark incomplete' : 'Complete'} ${task.title}`} aria-pressed={task.completed} data-testid={`button-toggle-${task.id}`}>{task.completed && <Check size={15} />}</button>
     <CategoryMark category={task.category} />
     <div className="item-main">
       {compact ? <strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong> : <button type="button" className="item-title-button" onClick={() => onEdit(task)} aria-label={`View or edit ${task.title}`}><strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong></button>}
-      {!compact && <div className="task-meta"><span className="tag">{task.category}</span><span className="tag">{task.priority} priority</span>{task.repeat !== 'Never' && <span className="tag"><Repeat2 size={11} />{task.repeat}</span>}<span className="tag"><Clock3 size={11} />{formatDate(task.dueDate, { month: 'short', day: 'numeric' })}{task.dueTime ? ` · ${timeLabel(task.dueTime)}` : ''}{task.endTime ? `–${timeLabel(task.endTime)}` : ''}</span></div>}
-      {compact && <small>{task.category}{task.dueTime ? ` · ${timeLabel(task.dueTime)}` : ''}</small>}
+      {!compact && <div className="task-meta"><span className="tag">{task.category}</span><span className="tag">{task.priority} priority</span>{task.repeat !== 'Never' && <span className="tag"><Repeat2 size={11} />{task.repeat}</span>}<span className="tag"><Clock3 size={11} />{formatDate(task.dueDate, { month: 'short', day: 'numeric' })}{task.dueTime ? ` · ${timeLabel(task.dueTime, timeFormat)}` : ''}{task.endTime ? `–${timeLabel(task.endTime, timeFormat)}` : ''}</span></div>}
+      {compact && <small>{showDate ? `${formatDate(task.dueDate, { month: 'short', day: 'numeric' })} · ` : ''}{task.category}{task.dueTime ? ` · ${timeLabel(task.dueTime, timeFormat)}` : ''}</small>}
     </div>
     <div className="row-actions">
       <button className="icon-button" onClick={() => onEdit(task)} aria-label={`Edit ${task.title}`} data-testid={`button-edit-${task.id}`}><Pencil size={15} /></button>
@@ -468,16 +523,19 @@ function TasksPage({ tasks, filter, setFilter, onAdd, onToggle, onEdit, onDelete
   });
   return <>
     <header className="page-heading"><p className="eyebrow">A place for all the little things</p><h1 className="page-title">Tasks</h1><p className="page-subtitle">{tasks.filter(task => !task.completed).length} things still on your mind</p></header>
-    <div className="toolbar task-toolbar"><div className="task-filters" role="tablist" aria-label="Filter tasks">{filters.map(value => <button className={`filter-chip ${filter === value ? 'active' : ''}`} key={value} onClick={() => setFilter(value)} role="tab" aria-selected={filter === value} data-testid={`filter-${value.toLowerCase()}`}>{value}</button>)}</div><div className="task-toolbar-actions"><label className="sort-control">Sort by<select aria-label="Sort tasks" value={sortBy} onChange={event => setSortBy(event.target.value as typeof sortBy)} data-testid="select-task-sort"><option>Due date</option><option>Priority</option><option>Title</option></select></label><button className="primary-button" onClick={onAdd} data-testid="button-create-task"><Plus size={17} />New task</button></div></div>
+    <div className="toolbar task-toolbar"><div className="task-filters" role="group" aria-label="Filter tasks">{filters.map(value => <button className={`filter-chip ${filter === value ? 'active' : ''}`} key={value} onClick={() => setFilter(value)} aria-pressed={filter === value} data-testid={`filter-${value.toLowerCase()}`}>{value}</button>)}</div><div className="task-toolbar-actions"><label className="sort-control">Sort by<select aria-label="Sort tasks" value={sortBy} onChange={event => setSortBy(event.target.value as typeof sortBy)} data-testid="select-task-sort"><option>Due date</option><option>Priority</option><option>Title</option></select></label><button className="primary-button" onClick={onAdd} data-testid="button-create-task"><Plus size={17} />New task</button></div></div>
     <div className="item-list">{sorted.length ? sorted.map(task => <TaskRow key={task.id} task={task} onToggle={onToggle} onEdit={onEdit} onDelete={onDelete} />) : <EmptyState icon={<ListChecks size={19} />} title={filter === 'Completed' ? 'Nothing checked off yet' : 'A clear little slate'} description={filter === 'All' ? 'Create a task and keep it somewhere gentle.' : `There are no ${filter.toLowerCase()} tasks right now.`} />}</div>
     <div className="section-heading"><h2>Categories</h2></div>
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>{CATEGORIES.map(category => <span className="tag" key={category} style={{ background: `${CATEGORY_COLORS[category]}20`, color: CATEGORY_COLORS[category] }}><span style={{ width: 7, height: 7, borderRadius: '50%', background: CATEGORY_COLORS[category] }} />{category}</span>)}</div>
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>{CATEGORIES.map(category => <span className="tag" key={category} style={{ background: `${CATEGORY_COLORS[category]}20`, color: 'hsl(var(--foreground))' }}><span style={{ width: 7, height: 7, borderRadius: '50%', background: CATEGORY_COLORS[category] }} />{category}</span>)}</div>
   </>;
 }
 
-function CalendarPage({ events, tasks, selectedDate, setSelectedDate, calendarView, setCalendarView, onAdd, onEdit, onDelete, onToggleTask, onEditTask }: { events: Event[]; tasks: Task[]; selectedDate: string; setSelectedDate: (date: string) => void; calendarView: 'Day' | 'Week' | 'Month'; setCalendarView: (view: 'Day' | 'Week' | 'Month') => void; onAdd: () => void; onEdit: (event: Event) => void; onDelete: (id: string) => void; onToggleTask: (id: string) => void; onEditTask: (task: Task) => void }) {
+function CalendarPage({ events, tasks, selectedDate, setSelectedDate, calendarView, setCalendarView, firstDayOfWeek, onAdd, onEdit, onDelete, onToggleTask, onEditTask }: { events: Event[]; tasks: Task[]; selectedDate: string; setSelectedDate: (date: string) => void; calendarView: 'Day' | 'Week' | 'Month'; setCalendarView: (view: 'Day' | 'Week' | 'Month') => void; firstDayOfWeek: 0 | 1; onAdd: () => void; onEdit: (event: Event) => void; onDelete: (id: string) => void; onToggleTask: (id: string) => void; onEditTask: (task: Task) => void }) {
+  const timeFormat = useContext(TimeFormatContext);
   const selected = dateFromKey(selectedDate);
   const calendarMonth = new Date(selected.getFullYear(), selected.getMonth(), 1);
+  const weekdayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const calendarWeekdays = Array.from({ length: 7 }, (_, index) => weekdayNames[(firstDayOfWeek + index) % 7]);
   const selectedEvents = events.filter(event => event.date === selectedDate);
   const selectedTasks = tasks.filter(task => task.dueDate === selectedDate);
   const selectedItems = [
@@ -486,14 +544,16 @@ function CalendarPage({ events, tasks, selectedDate, setSelectedDate, calendarVi
   ].sort((a, b) => a.time.localeCompare(b.time));
   const monthDays = useMemo(() => {
     const first = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
-    const start = addDays(first, -first.getDay());
+    const offset = (first.getDay() - firstDayOfWeek + 7) % 7;
+    const start = addDays(first, -offset);
     return Array.from({ length: 42 }, (_, index) => addDays(start, index));
-  }, [calendarMonth.getFullYear(), calendarMonth.getMonth()]);
+  }, [calendarMonth.getFullYear(), calendarMonth.getMonth(), firstDayOfWeek]);
   const weekDays = useMemo(() => {
     const day = dateFromKey(selectedDate);
-    const start = addDays(day, -day.getDay());
+    const offset = (day.getDay() - firstDayOfWeek + 7) % 7;
+    const start = addDays(day, -offset);
     return Array.from({ length: 7 }, (_, index) => addDays(start, index));
-  }, [selectedDate]);
+  }, [selectedDate, firstDayOfWeek]);
   const changePeriod = (amount: number) => {
     if (calendarView === 'Day') setSelectedDate(dateKey(addDays(dateFromKey(selectedDate), amount)));
     else if (calendarView === 'Week') setSelectedDate(dateKey(addDays(dateFromKey(selectedDate), amount * 7)));
@@ -509,13 +569,13 @@ function CalendarPage({ events, tasks, selectedDate, setSelectedDate, calendarVi
   return <>
     <header className="page-heading"><p className="eyebrow">A softer shape to the week</p><h1 className="page-title">Calendar</h1><p className="page-subtitle">See what’s ahead, one day at a time.</p></header>
     <div className="toolbar">
-      <div className="segmented" role="tablist" aria-label="Calendar view">{(['Day', 'Week', 'Month'] as const).map(view => <button key={view} className={calendarView === view ? 'selected' : ''} onClick={() => setCalendarView(view)} role="tab" aria-selected={calendarView === view} data-testid={`calendar-view-${view.toLowerCase()}`}>{view}</button>)}</div>
+      <div className="segmented" role="group" aria-label="Calendar view">{(['Day', 'Week', 'Month'] as const).map(view => <button key={view} className={calendarView === view ? 'selected' : ''} onClick={() => setCalendarView(view)} aria-pressed={calendarView === view} data-testid={`calendar-view-${view.toLowerCase()}`}>{view}</button>)}</div>
       <button className="primary-button" onClick={onAdd} data-testid="button-create-event"><Plus size={17} />Add event</button>
     </div>
     <section className="panel" style={{ padding: 15 }}>
       <div className="calendar-head"><button className="icon-button" aria-label="Previous period" onClick={() => changePeriod(-1)} data-testid="button-calendar-previous"><ChevronLeft /></button><strong data-testid="text-calendar-period">{dateTitle}</strong><button className="icon-button" aria-label="Next period" onClick={() => changePeriod(1)} data-testid="button-calendar-next"><ChevronRight /></button></div>
-      {calendarView === 'Month' && <div className="calendar-grid">{['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => <div className="calendar-weekday" key={`${day}-${index}`}>{day}</div>)}{monthDays.map(day => { const key = dateKey(day); const selected = key === selectedDate; return <button key={key} className={`calendar-day ${day.getMonth() === calendarMonth.getMonth() ? '' : 'outside'} ${key === todayKey() ? 'today' : ''} ${selected ? 'selected' : ''}`} onClick={() => setSelectedDate(key)} aria-label={formatDate(key)} aria-pressed={selected} data-testid={`calendar-day-${key}`}><span className="day-number">{day.getDate()}</span><span className="day-dots">{dotsFor(day).map((color, index) => <i key={`${color}-${index}`} className="day-dot" style={{ background: selected ? 'currentColor' : color }} />)}</span></button>; })}</div>}
-       {calendarView === 'Week' && <div className="week-grid">{weekDays.map(day => { const key = dateKey(day); return <button key={key} className={`week-day ${selectedDate === key ? 'selected' : ''}`} onClick={() => setSelectedDate(key)} aria-label={formatDate(key)} aria-pressed={selectedDate === key} data-testid={`calendar-week-day-${key}`}><strong>{day.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase()}</strong><span>{day.getDate()}</span><span className="day-dots">{dotsFor(day).map((color, index) => <i key={`${color}-${index}`} className="day-dot" style={{ background: color }} />)}</span></button>; })}</div>}
+      {calendarView === 'Month' && <div className="calendar-grid">{calendarWeekdays.map(day => <div className="calendar-weekday" key={day} aria-label={day}>{day.slice(0, 1)}</div>)}{monthDays.map(day => { const key = dateKey(day); const selected = key === selectedDate; return <button key={key} className={`calendar-day ${day.getMonth() === calendarMonth.getMonth() ? '' : 'outside'} ${key === todayKey() ? 'today' : ''} ${selected ? 'selected' : ''}`} onClick={() => setSelectedDate(key)} aria-label={formatDate(key)} aria-pressed={selected} data-testid={`calendar-day-${key}`}><span className="day-number">{day.getDate()}</span><span className="day-dots">{dotsFor(day).map((color, index) => <i key={`${color}-${index}`} className="day-dot" style={{ background: selected ? 'currentColor' : color }} />)}</span></button>; })}</div>}
+        {calendarView === 'Week' && <div className="week-grid">{weekDays.map(day => { const key = dateKey(day); return <button key={key} className={`week-day ${selectedDate === key ? 'selected' : ''}`} onClick={() => setSelectedDate(key)} aria-label={formatDate(key)} aria-pressed={selectedDate === key} data-testid={`calendar-week-day-${key}`}><strong>{day.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase()}</strong><span>{day.getDate()}</span><span className="day-dots">{dotsFor(day).map((color, index) => <i key={`${color}-${index}`} className="day-dot" style={{ background: color }} />)}</span></button>; })}</div>}
       {calendarView === 'Day' && <div className="calendar-day-focus"><div className="eyebrow" style={{ margin: '7px 0 4px', textAlign: 'center' }}>{dateFromKey(selectedDate).toLocaleDateString('en-US', { weekday: 'long' })}</div><div style={{ textAlign: 'center', font: '700 36px var(--display-font)' }}>{dateFromKey(selectedDate).getDate()}</div></div>}
     </section>
     <div className="section-heading"><h2>{formatDate(selectedDate, { weekday: 'long', month: 'long', day: 'numeric' })}</h2><button className="quiet-button" onClick={() => setSelectedDate(todayKey())} data-testid="button-calendar-today">Today</button></div>
@@ -523,7 +583,7 @@ function CalendarPage({ events, tasks, selectedDate, setSelectedDate, calendarVi
        {selectedItems.map(item => item.kind === 'event'
          ? <div className="event-card" key={item.value.id} data-testid={`card-event-${item.value.id}`}>
              <CategoryMark category={item.value.category} />
-             <div className="event-time">{timeLabel(item.value.startTime)}{item.value.endTime && <><br />{timeLabel(item.value.endTime)}</>}</div>
+              <div className="event-time">{timeLabel(item.value.startTime, timeFormat)}{item.value.endTime && <><br />{timeLabel(item.value.endTime, timeFormat)}</>}</div>
              <button type="button" className="event-body event-body-button" aria-label={`View or edit ${item.value.title}`} onClick={() => onEdit(item.value)}>
                <strong>{item.value.title}</strong><p>{item.value.category}{item.value.notes ? ` · ${item.value.notes}` : ''}</p>
              </button>
@@ -555,12 +615,12 @@ function SettingsPage({ preferences, onChange, mediaAssets, mediaUrls, mediaStor
     <header className="page-heading"><p className="eyebrow">Make this space yours</p><h1 className="page-title">Settings</h1><p className="page-subtitle">Small comforts, just the way you like them.</p></header>
     <section className="panel settings-group" data-testid="settings-appearance">
       <h2>Appearance</h2>
-      <div className="setting-row"><div><strong>Theme</strong><small>Choose a lighter or quieter evening look</small></div><button className="secondary-button" onClick={() => change({ theme: preferences.theme === 'light' ? 'dark' : 'light' })} aria-label={`Switch to ${preferences.theme === 'light' ? 'dark' : 'light'} theme`} data-testid="button-theme-toggle">{preferences.theme === 'light' ? <><Moon size={15} style={{ verticalAlign: 'middle', marginRight: 6 }} />Light</> : <><Sun size={15} style={{ verticalAlign: 'middle', marginRight: 6 }} />Dark</>}</button></div>
+      <div className="setting-row"><div><strong>Theme</strong><small>Choose a lighter or quieter evening look</small></div><button className="secondary-button" onClick={() => change({ theme: preferences.theme === 'light' ? 'dark' : 'light' })} aria-label={`Switch to ${preferences.theme === 'light' ? 'dark' : 'light'} theme`} data-testid="button-theme-toggle">{preferences.theme === 'light' ? <><Moon size={15} aria-hidden="true" />Dark mode</> : <><Sun size={15} aria-hidden="true" />Light mode</>}</button></div>
       <div className="setting-row accent-setting">
         <div><strong>Accent color</strong><small>A small color note throughout your planner</small></div>
         <div className="accent-picker">
-          <div className="accent-options" role="radiogroup" aria-label="Accent color">
-            {ACCENTS.map(accent => <button key={accent.name} className={`accent-choice ${preferences.accentColor === accent.value ? 'selected' : ''}`} style={{ background: `hsl(${accent.value})` }} onClick={() => change({ accentColor: accent.value })} aria-label={`${accent.name} accent`} aria-checked={preferences.accentColor === accent.value} role="radio" data-testid={`accent-${accent.name.toLowerCase()}`} />)}
+          <div className="accent-options" role="group" aria-label="Accent color">
+            {ACCENTS.map(accent => <button key={accent.name} className={`accent-choice ${preferences.accentColor === accent.value ? 'selected' : ''}`} style={{ background: `hsl(${accent.value})` }} onClick={() => change({ accentColor: accent.value })} aria-label={`${accent.name} accent`} aria-pressed={preferences.accentColor === accent.value} data-testid={`accent-${accent.name.toLowerCase()}`} />)}
           </div>
           <label className="custom-color-control" aria-label="Choose a custom accent color">
             <input type="color" value={hslToHex(preferences.accentColor)} onChange={event => change({ accentColor: hexToHsl(event.target.value) })} aria-label="Custom accent color" data-testid="input-custom-accent" />
@@ -573,6 +633,17 @@ function SettingsPage({ preferences, onChange, mediaAssets, mediaUrls, mediaStor
       <h2>Layout</h2>
       <div className="setting-row"><div><strong>Larger text</strong><small>Make planner details easier to read</small></div><button className={`switch ${preferences.largeText ? 'on' : ''}`} role="switch" aria-checked={preferences.largeText} aria-label="Larger text" onClick={() => change({ largeText: !preferences.largeText })} data-testid="switch-large-text" /></div>
       <div className="setting-row"><div><strong>Compact lists</strong><small>Bring your daily items a little closer together</small></div><button className={`switch ${preferences.compactMode ? 'on' : ''}`} role="switch" aria-checked={preferences.compactMode} aria-label="Compact lists" onClick={() => change({ compactMode: !preferences.compactMode })} data-testid="switch-compact-mode" /></div>
+    </section>
+    <section className="panel settings-group" style={{ marginTop: 12 }} data-testid="settings-calendar">
+      <h2>Calendar &amp; time</h2>
+      <div className="setting-row">
+        <div><strong>First day of the week</strong><small>Choose how your week is arranged</small></div>
+        <label className="setting-select-label" htmlFor="setting-week-start"><span className="sr-only">First day of the week</span><select id="setting-week-start" value={preferences.firstDayOfWeek} onChange={event => change({ firstDayOfWeek: Number(event.target.value) === 1 ? 1 : 0 })} data-testid="select-week-start"><option value={0}>Sunday</option><option value={1}>Monday</option></select></label>
+      </div>
+      <div className="setting-row">
+        <div><strong>Time format</strong><small>Use a 12-hour or 24-hour clock</small></div>
+        <label className="setting-select-label" htmlFor="setting-time-format"><span className="sr-only">Time format</span><select id="setting-time-format" value={preferences.timeFormat} onChange={event => change({ timeFormat: event.target.value === '24' ? '24' : '12' })} data-testid="select-time-format"><option value="12">12-hour</option><option value="24">24-hour</option></select></label>
+      </div>
     </section>
     <section className="panel settings-group media-settings" data-testid="settings-media">
       <h2>Personal imagery</h2>
@@ -660,9 +731,10 @@ function MediaUploadButton({ label, accept, testId, onSelect }: {
   </label>;
 }
 
-function EntryModal({ modal, onClose, onSaveTask, onSaveEvent, onDeleteTask, onDeleteEvent }: { modal: Exclude<ModalState, null>; onClose: () => void; onSaveTask: (task: Task) => void; onSaveEvent: (event: Event) => void; onDeleteTask: (id: string) => void; onDeleteEvent: (id: string) => void }) {
+function EntryModal({ modal, tasks, onClose, onSaveTask, onSaveEvent, onDeleteTask, onDeleteEvent }: { modal: Exclude<ModalState, null>; tasks: Task[]; onClose: () => void; onSaveTask: (task: Task) => void; onSaveEvent: (event: Event) => void; onDeleteTask: (id: string) => void; onDeleteEvent: (id: string) => void }) {
   const isTask = modal.kind === 'task';
   const existing = modal.value;
+  const modalRef = useRef<HTMLElement>(null);
   const [title, setTitle] = useState(existing?.title ?? '');
   const [date, setDate] = useState(isTask ? (existing as Task | undefined)?.dueDate ?? modal.defaultDate ?? todayKey() : (existing as Event | undefined)?.date ?? modal.defaultDate ?? todayKey());
   const [time, setTime] = useState(isTask ? (existing as Task | undefined)?.dueTime ?? '' : (existing as Event | undefined)?.startTime ?? '09:00');
@@ -673,12 +745,42 @@ function EntryModal({ modal, onClose, onSaveTask, onSaveEvent, onDeleteTask, onD
   const [notes, setNotes] = useState(existing?.notes ?? '');
   const [completed, setCompleted] = useState((existing as Task | undefined)?.completed ?? false);
   const [formError, setFormError] = useState('');
+  useEffect(() => {
+    const root = modalRef.current;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    root?.querySelector<HTMLElement>('[autofocus]')?.focus();
+    const keepFocusInside = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || !root) return;
+      const focusable = Array.from(root.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+      if (!focusable.length) { event.preventDefault(); root.focus(); return; }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !root.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !root.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    root?.addEventListener('keydown', keepFocusInside);
+    return () => {
+      root?.removeEventListener('keydown', keepFocusInside);
+      previousFocus?.focus();
+    };
+  }, []);
   const save = (event: FormEvent) => {
     event.preventDefault();
     if (!title.trim()) { setFormError('Enter a title before saving.'); return; }
+    if (!isTask && !time) { setFormError('Choose a start time for this event.'); return; }
+    if (endTime && !time) { setFormError('Add a start time before choosing an end time.'); return; }
     if (time && endTime && endTime <= time) { setFormError('End time must be later than start time.'); return; }
     setFormError('');
-    if (isTask) onSaveTask({ id: existing?.id ?? id(), title: title.trim(), dueDate: date, dueTime: time, endTime: endTime || undefined, category, priority, repeat, completed, notes: notes.trim() || undefined });
+    if (isTask) {
+      const task = { id: existing?.id ?? id(), title: title.trim(), dueDate: date, dueTime: time, endTime: endTime || undefined, category, priority, repeat, completed, notes: notes.trim() || undefined };
+      if (tasks.some(item => item.id !== task.id && sameTaskSlot(item, task))) { setFormError('A task with the same name, date, and start time already exists.'); return; }
+      onSaveTask(task);
+    }
     else onSaveEvent({ id: existing?.id ?? id(), title: title.trim(), date, startTime: time, endTime, category, notes: notes.trim() || undefined });
   };
   const deleteItem = () => {
@@ -687,10 +789,10 @@ function EntryModal({ modal, onClose, onSaveTask, onSaveEvent, onDeleteTask, onD
     onClose();
   };
   return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }} data-testid="dialog-backdrop">
-    <section className="modal" role="dialog" aria-modal="true" aria-labelledby="entry-modal-title">
+    <section ref={modalRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="entry-modal-title" tabIndex={-1}>
       <div className="modal-header"><h2 id="entry-modal-title">{existing ? `Edit ${isTask ? 'task' : 'event'}` : `Add ${isTask ? 'a task' : 'an event'}`}</h2><button className="icon-button" onClick={onClose} aria-label="Close dialog" data-testid="button-close-dialog"><X /></button></div>
-      <form onSubmit={save}>
-        {formError && <p className="form-error" role="alert" data-testid="status-entry-error">{formError}</p>}
+      <form onSubmit={save} aria-describedby={formError ? 'entry-form-error' : undefined}>
+        {formError && <p id="entry-form-error" className="form-error" role="alert" data-testid="status-entry-error">{formError}</p>}
         <div className="form-grid">
           <div className="field full"><label htmlFor="entry-title">What would you like to call it?</label><input id="entry-title" autoFocus required value={title} onChange={event => { setTitle(event.target.value); setFormError(''); }} placeholder={isTask ? 'A thing to remember…' : 'A moment on your calendar…'} data-testid="input-entry-title" /></div>
           <div className="field"><label htmlFor="entry-date">Date</label><input id="entry-date" type="date" required value={date} onChange={event => setDate(event.target.value)} data-testid="input-entry-date" /></div>

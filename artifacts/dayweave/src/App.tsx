@@ -10,7 +10,7 @@ import { deleteMedia, listSavedMedia, saveMedia, type SavedMedia } from '@/lib/m
 type Category = 'Personal' | 'Work' | 'Wellbeing' | 'Home' | 'Learning';
 type Priority = 'Low' | 'Medium' | 'High';
 type Repeat = 'Never' | 'Daily' | 'Weekly' | 'Monthly';
-type Task = { id: string; title: string; dueDate: string; dueTime: string; category: Category; priority: Priority; repeat: Repeat; completed: boolean; notes?: string; seriesId?: string };
+type Task = { id: string; title: string; dueDate: string; dueTime: string; endTime?: string; category: Category; priority: Priority; repeat: Repeat; completed: boolean; notes?: string; seriesId?: string };
 type Event = { id: string; title: string; date: string; startTime: string; endTime: string; category: Category; notes?: string };
 type Preferences = { theme: 'light' | 'dark'; accentColor: string; compactMode: boolean; largeText: boolean };
 type Proposal = { id: string; title: string; date: string; startTime: string; endTime: string; category: Category; notes: string };
@@ -151,16 +151,21 @@ function App() {
   const [modal, setModal] = useState<ModalState>(null);
   const [calendarView, setCalendarView] = useState<'Day' | 'Week' | 'Month'>('Week');
   const [selectedDate, setSelectedDate] = useState(todayKey());
-  const [calendarMonth, setCalendarMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [taskFilter, setTaskFilter] = useState('All');
   const [quickText, setQuickText] = useState('');
   const [plannerText, setPlannerText] = useState('');
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [approved, setApproved] = useState<string[]>([]);
   const [toast, setToast] = useState('');
+  const [storageError, setStorageError] = useState('');
 
   useEffect(() => {
-    localStorage.setItem(STORE_KEY, JSON.stringify({ tasks, events, preferences }));
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({ tasks, events, preferences }));
+      setStorageError('');
+    } catch {
+      setStorageError('Changes could not be saved in this browser. Free up storage space or try another browser.');
+    }
   }, [tasks, events, preferences]);
   useEffect(() => {
     let cancelled = false;
@@ -336,8 +341,9 @@ function App() {
         <div className="rail-bottom">A little more room for what matters.</div>
       </aside>
       <main className="main-content">
+        {storageError && <p className="storage-error" role="alert" data-testid="status-save-error">{storageError}</p>}
         {currentPage === 'today' && <TodayPage tasks={todayTasks} upcoming={upcoming} completed={completedToday} onToggle={toggleTask} onQuickAdd={quickAdd} quickText={quickText} setQuickText={setQuickText} onAddTask={() => setModal({ kind: 'task' })} onEditTask={(task) => setModal({ kind: 'task', value: task })} onPlannerChange={setPlannerText} plannerText={plannerText} onGeneratePlan={generatePlan} proposals={proposals} approved={approved} setApproved={setApproved} onAddApproved={addApproved} />}
-        {currentPage === 'calendar' && <CalendarPage events={events} tasks={tasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} calendarView={calendarView} setCalendarView={setCalendarView} calendarMonth={calendarMonth} setCalendarMonth={setCalendarMonth} onAdd={() => setModal({ kind: 'event', defaultDate: selectedDate })} onEdit={(event) => setModal({ kind: 'event', value: event })} onDelete={deleteEvent} onToggleTask={toggleTask} onEditTask={(task) => setModal({ kind: 'task', value: task })} />}
+        {currentPage === 'calendar' && <CalendarPage events={events} tasks={tasks} selectedDate={selectedDate} setSelectedDate={setSelectedDate} calendarView={calendarView} setCalendarView={setCalendarView} onAdd={() => setModal({ kind: 'event', defaultDate: selectedDate })} onEdit={(event) => setModal({ kind: 'event', value: event })} onDelete={deleteEvent} onToggleTask={toggleTask} onEditTask={(task) => setModal({ kind: 'task', value: task })} />}
         {currentPage === 'tasks' && <TasksPage tasks={tasks} filter={taskFilter} setFilter={setTaskFilter} onAdd={() => setModal({ kind: 'task' })} onToggle={toggleTask} onEdit={(task) => setModal({ kind: 'task', value: task })} onDelete={deleteTask} />}
         {currentPage === 'settings' && <SettingsPage preferences={preferences} onChange={setPreferences} mediaAssets={mediaAssets} mediaUrls={mediaUrls} mediaStorageMessage={mediaStorageMessage} onImportMedia={importMedia} onRemoveMedia={removeImportedMedia} />}
       </main>
@@ -413,7 +419,7 @@ function ScheduleEvent({ event }: { event: Event }) {
 }
 
 function ScheduleTask({ task, onToggle, onEdit }: { task: Task; onToggle: (id: string) => void; onEdit?: (task: Task) => void }) {
-  return <div className="schedule-row" data-testid={`row-schedule-task-${task.id}`}><span className="time-label">{timeLabel(task.dueTime) || 'Anytime'}</span><CategoryMark category={task.category} /><div className="item-main"><strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong><small>{task.category} · Task</small></div><button className={`check-button ${task.completed ? 'checked' : ''}`} onClick={() => onToggle(task.id)} aria-label={`${task.completed ? 'Mark incomplete' : 'Complete'} ${task.title}`} data-testid={`button-toggle-${task.id}`}>{task.completed && <Check size={15} />}</button>{onEdit && <button className="icon-button" onClick={() => onEdit(task)} aria-label={`Edit ${task.title}`} data-testid={`button-edit-${task.id}`}><Pencil size={15} /></button>}</div>;
+  return <div className="schedule-row" data-testid={`row-schedule-task-${task.id}`}><span className="time-label">{timeLabel(task.dueTime) || 'Anytime'}</span><CategoryMark category={task.category} /><div className="item-main">{onEdit ? <button type="button" className="item-title-button" onClick={() => onEdit(task)} aria-label={`View or edit ${task.title}`}><strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong></button> : <strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong>}<small>{task.category} · Task{task.endTime ? ` · until ${timeLabel(task.endTime)}` : ''}</small></div><div className="row-actions"><button className={`check-button ${task.completed ? 'checked' : ''}`} onClick={() => onToggle(task.id)} aria-label={`${task.completed ? 'Mark incomplete' : 'Complete'} ${task.title}`} data-testid={`button-toggle-${task.id}`}>{task.completed && <Check size={15} />}</button>{onEdit && <button className="icon-button" onClick={() => onEdit(task)} aria-label={`Edit ${task.title}`} data-testid={`button-edit-${task.id}`}><Pencil size={15} /></button>}</div></div>;
 }
 
 function CategoryMark({ category }: { category: Category }) {
@@ -428,12 +434,14 @@ function TaskRow({ task, onToggle, onEdit, onDelete, compact = false }: { task: 
     <button className={`check-button ${task.completed ? 'checked' : ''}`} onClick={() => onToggle(task.id)} aria-label={`${task.completed ? 'Mark incomplete' : 'Complete'} ${task.title}`} data-testid={`button-toggle-${task.id}`}>{task.completed && <Check size={15} />}</button>
     <CategoryMark category={task.category} />
     <div className="item-main">
-      <strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong>
-      {!compact && <div className="task-meta"><span className="tag">{task.category}</span><span className="tag">{task.priority} priority</span>{task.repeat !== 'Never' && <span className="tag"><Repeat2 size={11} />{task.repeat}</span>}<span className="tag"><Clock3 size={11} />{formatDate(task.dueDate, { month: 'short', day: 'numeric' })}{task.dueTime ? ` · ${timeLabel(task.dueTime)}` : ''}</span></div>}
+      {compact ? <strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong> : <button type="button" className="item-title-button" onClick={() => onEdit(task)} aria-label={`View or edit ${task.title}`}><strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong></button>}
+      {!compact && <div className="task-meta"><span className="tag">{task.category}</span><span className="tag">{task.priority} priority</span>{task.repeat !== 'Never' && <span className="tag"><Repeat2 size={11} />{task.repeat}</span>}<span className="tag"><Clock3 size={11} />{formatDate(task.dueDate, { month: 'short', day: 'numeric' })}{task.dueTime ? ` · ${timeLabel(task.dueTime)}` : ''}{task.endTime ? `–${timeLabel(task.endTime)}` : ''}</span></div>}
       {compact && <small>{task.category}{task.dueTime ? ` · ${timeLabel(task.dueTime)}` : ''}</small>}
     </div>
-    <button className="icon-button" onClick={() => onEdit(task)} aria-label={`Edit ${task.title}`} data-testid={`button-edit-${task.id}`}><Pencil size={15} /></button>
-    {!compact && onDelete && <button className="icon-button" onClick={() => onDelete(task.id)} aria-label={`Delete ${task.title}`} data-testid={`button-delete-${task.id}`}><Trash2 size={16} /></button>}
+    <div className="row-actions">
+      <button className="icon-button" onClick={() => onEdit(task)} aria-label={`Edit ${task.title}`} data-testid={`button-edit-${task.id}`}><Pencil size={15} /></button>
+      {!compact && onDelete && <button className="icon-button" onClick={() => onDelete(task.id)} aria-label={`Delete ${task.title}`} data-testid={`button-delete-${task.id}`}><Trash2 size={16} /></button>}
+    </div>
   </div>;
 }
 
@@ -442,25 +450,45 @@ function EmptyState({ icon, title, description }: { icon: ReactNode; title: stri
 }
 
 function TasksPage({ tasks, filter, setFilter, onAdd, onToggle, onEdit, onDelete }: { tasks: Task[]; filter: string; setFilter: (filter: string) => void; onAdd: () => void; onToggle: (id: string) => void; onEdit: (task: Task) => void; onDelete: (id: string) => void }) {
-  const filters = ['All', 'Today', 'Upcoming', 'Completed'];
-  const filtered = tasks.filter(task => filter === 'All' || (filter === 'Today' && task.dueDate === todayKey()) || (filter === 'Upcoming' && task.dueDate > todayKey() && !task.completed) || (filter === 'Completed' && task.completed));
+  const filters = ['All', 'Today', 'Overdue', 'Upcoming', 'Completed'];
+  const [sortBy, setSortBy] = useState<'Due date' | 'Priority' | 'Title'>('Due date');
+  const filtered = tasks.filter(task =>
+    filter === 'All' ||
+    (filter === 'Today' && task.dueDate === todayKey()) ||
+    (filter === 'Overdue' && task.dueDate < todayKey() && !task.completed) ||
+    (filter === 'Upcoming' && task.dueDate > todayKey() && !task.completed) ||
+    (filter === 'Completed' && task.completed),
+  );
+  const priorityOrder: Record<Priority, number> = { High: 0, Medium: 1, Low: 2 };
+  const sorted = [...filtered].sort((a, b) => {
+    const byDate = a.dueDate.localeCompare(b.dueDate) || (a.dueTime || '99:99').localeCompare(b.dueTime || '99:99');
+    if (sortBy === 'Priority') return priorityOrder[a.priority] - priorityOrder[b.priority] || byDate;
+    if (sortBy === 'Title') return a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }) || byDate;
+    return byDate;
+  });
   return <>
     <header className="page-heading"><p className="eyebrow">A place for all the little things</p><h1 className="page-title">Tasks</h1><p className="page-subtitle">{tasks.filter(task => !task.completed).length} things still on your mind</p></header>
-    <div className="toolbar task-toolbar"><div className="task-filters" role="tablist" aria-label="Filter tasks">{filters.map(value => <button className={`filter-chip ${filter === value ? 'active' : ''}`} key={value} onClick={() => setFilter(value)} role="tab" aria-selected={filter === value} data-testid={`filter-${value.toLowerCase()}`}>{value}</button>)}</div><button className="primary-button" onClick={onAdd} data-testid="button-create-task"><Plus size={17} />New task</button></div>
-    <div className="item-list">{filtered.length ? filtered.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.dueTime.localeCompare(b.dueTime)).map(task => <TaskRow key={task.id} task={task} onToggle={onToggle} onEdit={onEdit} onDelete={onDelete} />) : <EmptyState icon={<ListChecks size={19} />} title={filter === 'Completed' ? 'Nothing checked off yet' : 'A clear little slate'} description={filter === 'All' ? 'Create a task and keep it somewhere gentle.' : `There are no ${filter.toLowerCase()} tasks right now.`} />}</div>
+    <div className="toolbar task-toolbar"><div className="task-filters" role="tablist" aria-label="Filter tasks">{filters.map(value => <button className={`filter-chip ${filter === value ? 'active' : ''}`} key={value} onClick={() => setFilter(value)} role="tab" aria-selected={filter === value} data-testid={`filter-${value.toLowerCase()}`}>{value}</button>)}</div><div className="task-toolbar-actions"><label className="sort-control">Sort by<select aria-label="Sort tasks" value={sortBy} onChange={event => setSortBy(event.target.value as typeof sortBy)} data-testid="select-task-sort"><option>Due date</option><option>Priority</option><option>Title</option></select></label><button className="primary-button" onClick={onAdd} data-testid="button-create-task"><Plus size={17} />New task</button></div></div>
+    <div className="item-list">{sorted.length ? sorted.map(task => <TaskRow key={task.id} task={task} onToggle={onToggle} onEdit={onEdit} onDelete={onDelete} />) : <EmptyState icon={<ListChecks size={19} />} title={filter === 'Completed' ? 'Nothing checked off yet' : 'A clear little slate'} description={filter === 'All' ? 'Create a task and keep it somewhere gentle.' : `There are no ${filter.toLowerCase()} tasks right now.`} />}</div>
     <div className="section-heading"><h2>Categories</h2></div>
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>{CATEGORIES.map(category => <span className="tag" key={category} style={{ background: `${CATEGORY_COLORS[category]}20`, color: CATEGORY_COLORS[category] }}><span style={{ width: 7, height: 7, borderRadius: '50%', background: CATEGORY_COLORS[category] }} />{category}</span>)}</div>
   </>;
 }
 
-function CalendarPage({ events, tasks, selectedDate, setSelectedDate, calendarView, setCalendarView, calendarMonth, setCalendarMonth, onAdd, onEdit, onDelete, onToggleTask, onEditTask }: { events: Event[]; tasks: Task[]; selectedDate: string; setSelectedDate: (date: string) => void; calendarView: 'Day' | 'Week' | 'Month'; setCalendarView: (view: 'Day' | 'Week' | 'Month') => void; calendarMonth: Date; setCalendarMonth: (date: Date) => void; onAdd: () => void; onEdit: (event: Event) => void; onDelete: (id: string) => void; onToggleTask: (id: string) => void; onEditTask: (task: Task) => void }) {
-  const selectedEvents = events.filter(event => event.date === selectedDate).sort((a, b) => a.startTime.localeCompare(b.startTime));
-  const selectedTasks = tasks.filter(task => task.dueDate === selectedDate).sort((a, b) => a.dueTime.localeCompare(b.dueTime));
+function CalendarPage({ events, tasks, selectedDate, setSelectedDate, calendarView, setCalendarView, onAdd, onEdit, onDelete, onToggleTask, onEditTask }: { events: Event[]; tasks: Task[]; selectedDate: string; setSelectedDate: (date: string) => void; calendarView: 'Day' | 'Week' | 'Month'; setCalendarView: (view: 'Day' | 'Week' | 'Month') => void; onAdd: () => void; onEdit: (event: Event) => void; onDelete: (id: string) => void; onToggleTask: (id: string) => void; onEditTask: (task: Task) => void }) {
+  const selected = dateFromKey(selectedDate);
+  const calendarMonth = new Date(selected.getFullYear(), selected.getMonth(), 1);
+  const selectedEvents = events.filter(event => event.date === selectedDate);
+  const selectedTasks = tasks.filter(task => task.dueDate === selectedDate);
+  const selectedItems = [
+    ...selectedEvents.map(event => ({ kind: 'event' as const, time: event.startTime || '99:99', value: event })),
+    ...selectedTasks.map(task => ({ kind: 'task' as const, time: task.dueTime || '99:99', value: task })),
+  ].sort((a, b) => a.time.localeCompare(b.time));
   const monthDays = useMemo(() => {
     const first = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
     const start = addDays(first, -first.getDay());
     return Array.from({ length: 42 }, (_, index) => addDays(start, index));
-  }, [calendarMonth]);
+  }, [calendarMonth.getFullYear(), calendarMonth.getMonth()]);
   const weekDays = useMemo(() => {
     const day = dateFromKey(selectedDate);
     const start = addDays(day, -day.getDay());
@@ -469,7 +497,7 @@ function CalendarPage({ events, tasks, selectedDate, setSelectedDate, calendarVi
   const changePeriod = (amount: number) => {
     if (calendarView === 'Day') setSelectedDate(dateKey(addDays(dateFromKey(selectedDate), amount)));
     else if (calendarView === 'Week') setSelectedDate(dateKey(addDays(dateFromKey(selectedDate), amount * 7)));
-    else setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + amount, 1));
+    else setSelectedDate(dateKey(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + amount, 1)));
   };
   const dateTitle = calendarView === 'Month' ? calendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : calendarView === 'Week' ? `${formatDate(dateKey(weekDays[0]), { month: 'short', day: 'numeric' })} – ${formatDate(dateKey(weekDays[6]), { month: 'short', day: 'numeric' })}` : formatDate(selectedDate, { month: 'long', day: 'numeric', year: 'numeric' });
   const dotsFor = (date: Date) => {
@@ -487,14 +515,25 @@ function CalendarPage({ events, tasks, selectedDate, setSelectedDate, calendarVi
     <section className="panel" style={{ padding: 15 }}>
       <div className="calendar-head"><button className="icon-button" aria-label="Previous period" onClick={() => changePeriod(-1)} data-testid="button-calendar-previous"><ChevronLeft /></button><strong data-testid="text-calendar-period">{dateTitle}</strong><button className="icon-button" aria-label="Next period" onClick={() => changePeriod(1)} data-testid="button-calendar-next"><ChevronRight /></button></div>
       {calendarView === 'Month' && <div className="calendar-grid">{['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => <div className="calendar-weekday" key={`${day}-${index}`}>{day}</div>)}{monthDays.map(day => { const key = dateKey(day); const selected = key === selectedDate; return <button key={key} className={`calendar-day ${day.getMonth() === calendarMonth.getMonth() ? '' : 'outside'} ${key === todayKey() ? 'today' : ''} ${selected ? 'selected' : ''}`} onClick={() => setSelectedDate(key)} aria-label={formatDate(key)} aria-pressed={selected} data-testid={`calendar-day-${key}`}><span className="day-number">{day.getDate()}</span><span className="day-dots">{dotsFor(day).map((color, index) => <i key={`${color}-${index}`} className="day-dot" style={{ background: selected ? 'currentColor' : color }} />)}</span></button>; })}</div>}
-      {calendarView === 'Week' && <div className="week-grid">{weekDays.map(day => { const key = dateKey(day); return <button key={key} className={`week-day ${selectedDate === key ? 'selected' : ''}`} onClick={() => setSelectedDate(key)} data-testid={`calendar-week-day-${key}`}><strong>{day.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase()}</strong><span>{day.getDate()}</span><span className="day-dots">{dotsFor(day).map((color, index) => <i key={`${color}-${index}`} className="day-dot" style={{ background: color }} />)}</span></button>; })}</div>}
+       {calendarView === 'Week' && <div className="week-grid">{weekDays.map(day => { const key = dateKey(day); return <button key={key} className={`week-day ${selectedDate === key ? 'selected' : ''}`} onClick={() => setSelectedDate(key)} aria-label={formatDate(key)} aria-pressed={selectedDate === key} data-testid={`calendar-week-day-${key}`}><strong>{day.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase()}</strong><span>{day.getDate()}</span><span className="day-dots">{dotsFor(day).map((color, index) => <i key={`${color}-${index}`} className="day-dot" style={{ background: color }} />)}</span></button>; })}</div>}
       {calendarView === 'Day' && <div className="calendar-day-focus"><div className="eyebrow" style={{ margin: '7px 0 4px', textAlign: 'center' }}>{dateFromKey(selectedDate).toLocaleDateString('en-US', { weekday: 'long' })}</div><div style={{ textAlign: 'center', font: '700 36px var(--display-font)' }}>{dateFromKey(selectedDate).getDate()}</div></div>}
     </section>
     <div className="section-heading"><h2>{formatDate(selectedDate, { weekday: 'long', month: 'long', day: 'numeric' })}</h2><button className="quiet-button" onClick={() => setSelectedDate(todayKey())} data-testid="button-calendar-today">Today</button></div>
-    {selectedEvents.length || selectedTasks.length ? <div className="item-list">
-      {selectedEvents.map(event => <div className="event-card" key={event.id} data-testid={`card-event-${event.id}`}><CategoryMark category={event.category} /><div className="event-time">{timeLabel(event.startTime)}{event.endTime && <><br />{timeLabel(event.endTime)}</>}</div><div className="event-body"><strong>{event.title}</strong><p>{event.category}{event.notes ? ` · ${event.notes}` : ''}</p></div><button className="icon-button" aria-label={`Edit ${event.title}`} onClick={() => onEdit(event)} data-testid={`button-edit-event-${event.id}`}><Pencil size={15} /></button><button className="icon-button" aria-label={`Delete ${event.title}`} onClick={() => onDelete(event.id)} data-testid={`button-delete-event-${event.id}`}><Trash2 size={16} /></button></div>)}
-      {selectedTasks.map(task => <ScheduleTask key={task.id} task={task} onToggle={onToggleTask} onEdit={onEditTask} />)}
-    </div> : <EmptyState icon={<CalendarDays size={19} />} title="Nothing planned for this day" description="Leave it open, or add an event when you have something in mind." />}
+     {selectedItems.length ? <div className="item-list">
+       {selectedItems.map(item => item.kind === 'event'
+         ? <div className="event-card" key={item.value.id} data-testid={`card-event-${item.value.id}`}>
+             <CategoryMark category={item.value.category} />
+             <div className="event-time">{timeLabel(item.value.startTime)}{item.value.endTime && <><br />{timeLabel(item.value.endTime)}</>}</div>
+             <button type="button" className="event-body event-body-button" aria-label={`View or edit ${item.value.title}`} onClick={() => onEdit(item.value)}>
+               <strong>{item.value.title}</strong><p>{item.value.category}{item.value.notes ? ` · ${item.value.notes}` : ''}</p>
+             </button>
+             <div className="event-actions">
+               <button className="icon-button" aria-label={`Edit ${item.value.title}`} onClick={() => onEdit(item.value)} data-testid={`button-edit-event-${item.value.id}`}><Pencil size={15} /></button>
+               <button className="icon-button" aria-label={`Delete ${item.value.title}`} onClick={() => onDelete(item.value.id)} data-testid={`button-delete-event-${item.value.id}`}><Trash2 size={16} /></button>
+             </div>
+           </div>
+         : <ScheduleTask key={item.value.id} task={item.value} onToggle={onToggleTask} onEdit={onEditTask} />)}
+     </div> : <EmptyState icon={<CalendarDays size={19} />} title="Nothing planned for this day" description="Leave it open, or add an event when you have something in mind." />}
   </>;
 }
 
@@ -627,16 +666,19 @@ function EntryModal({ modal, onClose, onSaveTask, onSaveEvent, onDeleteTask, onD
   const [title, setTitle] = useState(existing?.title ?? '');
   const [date, setDate] = useState(isTask ? (existing as Task | undefined)?.dueDate ?? modal.defaultDate ?? todayKey() : (existing as Event | undefined)?.date ?? modal.defaultDate ?? todayKey());
   const [time, setTime] = useState(isTask ? (existing as Task | undefined)?.dueTime ?? '' : (existing as Event | undefined)?.startTime ?? '09:00');
-  const [endTime, setEndTime] = useState((existing as Event | undefined)?.endTime ?? '10:00');
+  const [endTime, setEndTime] = useState(isTask ? (existing as Task | undefined)?.endTime ?? '' : (existing as Event | undefined)?.endTime ?? '10:00');
   const [category, setCategory] = useState<Category>(existing?.category ?? 'Personal');
   const [priority, setPriority] = useState<Priority>((existing as Task | undefined)?.priority ?? 'Medium');
   const [repeat, setRepeat] = useState<Repeat>((existing as Task | undefined)?.repeat ?? 'Never');
   const [notes, setNotes] = useState(existing?.notes ?? '');
   const [completed, setCompleted] = useState((existing as Task | undefined)?.completed ?? false);
+  const [formError, setFormError] = useState('');
   const save = (event: FormEvent) => {
     event.preventDefault();
-    if (!title.trim()) return;
-    if (isTask) onSaveTask({ id: existing?.id ?? id(), title: title.trim(), dueDate: date, dueTime: time, category, priority, repeat, completed, notes: notes.trim() || undefined });
+    if (!title.trim()) { setFormError('Enter a title before saving.'); return; }
+    if (time && endTime && endTime <= time) { setFormError('End time must be later than start time.'); return; }
+    setFormError('');
+    if (isTask) onSaveTask({ id: existing?.id ?? id(), title: title.trim(), dueDate: date, dueTime: time, endTime: endTime || undefined, category, priority, repeat, completed, notes: notes.trim() || undefined });
     else onSaveEvent({ id: existing?.id ?? id(), title: title.trim(), date, startTime: time, endTime, category, notes: notes.trim() || undefined });
   };
   const deleteItem = () => {
@@ -648,11 +690,12 @@ function EntryModal({ modal, onClose, onSaveTask, onSaveEvent, onDeleteTask, onD
     <section className="modal" role="dialog" aria-modal="true" aria-labelledby="entry-modal-title">
       <div className="modal-header"><h2 id="entry-modal-title">{existing ? `Edit ${isTask ? 'task' : 'event'}` : `Add ${isTask ? 'a task' : 'an event'}`}</h2><button className="icon-button" onClick={onClose} aria-label="Close dialog" data-testid="button-close-dialog"><X /></button></div>
       <form onSubmit={save}>
+        {formError && <p className="form-error" role="alert" data-testid="status-entry-error">{formError}</p>}
         <div className="form-grid">
-          <div className="field full"><label htmlFor="entry-title">What would you like to call it?</label><input id="entry-title" autoFocus required value={title} onChange={event => setTitle(event.target.value)} placeholder={isTask ? 'A thing to remember…' : 'A moment on your calendar…'} data-testid="input-entry-title" /></div>
+          <div className="field full"><label htmlFor="entry-title">What would you like to call it?</label><input id="entry-title" autoFocus required value={title} onChange={event => { setTitle(event.target.value); setFormError(''); }} placeholder={isTask ? 'A thing to remember…' : 'A moment on your calendar…'} data-testid="input-entry-title" /></div>
           <div className="field"><label htmlFor="entry-date">Date</label><input id="entry-date" type="date" required value={date} onChange={event => setDate(event.target.value)} data-testid="input-entry-date" /></div>
-          <div className="field"><label htmlFor="entry-time">{isTask ? 'Due time' : 'Starts'}</label><input id="entry-time" type="time" value={time} onChange={event => setTime(event.target.value)} data-testid="input-entry-time" /></div>
-          {!isTask && <div className="field"><label htmlFor="entry-end-time">Ends</label><input id="entry-end-time" type="time" value={endTime} onChange={event => setEndTime(event.target.value)} data-testid="input-entry-end-time" /></div>}
+          <div className="field"><label htmlFor="entry-time">{isTask ? 'Start time (optional)' : 'Starts'}</label><input id="entry-time" type="time" value={time} onChange={event => { setTime(event.target.value); setFormError(''); }} data-testid="input-entry-time" /></div>
+          <div className="field"><label htmlFor="entry-end-time">{isTask ? 'End time (optional)' : 'Ends'}</label><input id="entry-end-time" type="time" value={endTime} onChange={event => { setEndTime(event.target.value); setFormError(''); }} data-testid="input-entry-end-time" /></div>
           <div className="field"><label htmlFor="entry-category">Category</label><select id="entry-category" value={category} onChange={event => setCategory(event.target.value as Category)} data-testid="select-entry-category">{CATEGORIES.map(item => <option key={item}>{item}</option>)}</select></div>
           {isTask && <><div className="field"><label htmlFor="entry-priority">Priority</label><select id="entry-priority" value={priority} onChange={event => setPriority(event.target.value as Priority)} data-testid="select-entry-priority">{(['Low', 'Medium', 'High'] as Priority[]).map(item => <option key={item}>{item}</option>)}</select></div><div className="field"><label htmlFor="entry-repeat">Repeat</label><select id="entry-repeat" value={repeat} onChange={event => setRepeat(event.target.value as Repeat)} data-testid="select-entry-repeat">{(['Never', 'Daily', 'Weekly', 'Monthly'] as Repeat[]).map(item => <option key={item}>{item}</option>)}</select></div><div className="field full"><label style={{ display: 'flex', gap: 8, alignItems: 'center' }}><input type="checkbox" checked={completed} onChange={event => setCompleted(event.target.checked)} data-testid="checkbox-entry-completed" />Already completed</label></div></>}
           <div className="field full"><label htmlFor="entry-notes">Notes <span style={{ fontWeight: 400 }}>(optional)</span></label><textarea id="entry-notes" value={notes} onChange={event => setNotes(event.target.value)} placeholder="Anything else worth remembering?" data-testid="input-entry-notes" /></div>

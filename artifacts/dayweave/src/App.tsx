@@ -12,7 +12,7 @@ type Priority = 'Low' | 'Medium' | 'High';
 type Repeat = 'Never' | 'Daily' | 'Weekly' | 'Monthly';
 type Task = { id: string; title: string; dueDate: string; dueTime: string; category: Category; priority: Priority; repeat: Repeat; completed: boolean; notes?: string; seriesId?: string };
 type Event = { id: string; title: string; date: string; startTime: string; endTime: string; category: Category; notes?: string };
-type Preferences = { theme: 'light' | 'dark'; accentColor: string; compactMode: boolean };
+type Preferences = { theme: 'light' | 'dark'; accentColor: string; compactMode: boolean; largeText: boolean };
 type Proposal = { id: string; title: string; date: string; startTime: string; endTime: string; category: Category; notes: string };
 type Page = 'today' | 'calendar' | 'tasks' | 'settings';
 type ModalState = { kind: 'task' | 'event'; value?: Task | Event; defaultDate?: string } | null;
@@ -112,7 +112,7 @@ function seedData() {
       { id: 'seed-e3', title: 'A walk around the neighborhood', date: today, startTime: '15:30', endTime: '16:00', category: 'Wellbeing' as Category },
       { id: 'seed-e4', title: 'Coffee with Lena', date: tomorrow, startTime: '09:00', endTime: '10:00', category: 'Personal' as Category },
     ],
-    preferences: { theme: 'light' as const, accentColor: ACCENTS[0].value, compactMode: false },
+    preferences: { theme: 'light' as const, accentColor: ACCENTS[0].value, compactMode: false, largeText: false },
   };
 }
 
@@ -121,7 +121,18 @@ function loadData() {
     const stored = localStorage.getItem(STORE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
-      if (parsed && Array.isArray(parsed.tasks) && Array.isArray(parsed.events) && parsed.preferences) return parsed;
+      if (parsed && Array.isArray(parsed.tasks) && Array.isArray(parsed.events) && parsed.preferences) {
+        return {
+          ...parsed,
+          preferences: {
+            theme: 'light',
+            accentColor: ACCENTS[0].value,
+            compactMode: false,
+            largeText: false,
+            ...parsed.preferences,
+          },
+        };
+      }
     }
   } catch { /* start with the thoughtfully seeded local sample */ }
   return seedData();
@@ -308,7 +319,7 @@ function App() {
   const brandMarkUrl = mediaUrls[BRAND_MEDIA_KEY];
 
   return (
-    <div className={`app-shell ${preferences.compactMode ? 'compact' : ''}`} data-testid="app-dayweave">
+    <div className={`app-shell ${preferences.compactMode ? 'compact' : ''} ${preferences.largeText ? 'large-text' : ''}`} data-testid="app-dayweave">
       {backgroundUrl && backgroundAsset && (
         <div className="background-media" aria-hidden="true" data-testid="background-media">
           {backgroundAsset.mimeType.startsWith('video/')
@@ -363,7 +374,7 @@ function TodayPage({ tasks, upcoming, completed, onToggle, onQuickAdd, quickText
           </section>
           <div className="section-heading"><h2>Your day</h2><span className="eyebrow" style={{ margin: 0 }}>{formatDate(todayKey(), { month: 'short', day: 'numeric' })}</span></div>
           {upcoming.length > 0 ? <div className="item-list">
-            {upcoming.map(item => item.type === 'event' ? <ScheduleEvent key={`event-${item.value.id}`} event={item.value as Event} /> : <ScheduleTask key={`task-${item.value.id}`} task={item.value as Task} onToggle={onToggle} onEdit={onEditTask} />)}
+            {upcoming.map(item => item.type === 'event' ? <ScheduleEvent key={`event-${item.value.id}`} event={item.value as Event} /> : <ScheduleTask key={`task-${item.value.id}`} task={item.value as Task} onToggle={onToggle} />)}
           </div> : <EmptyState icon={<CalendarDays size={19} />} title="A little breathing room" description="Nothing on the schedule just yet. Add something when you’re ready." />}
           <form className="quick-add" onSubmit={onQuickAdd}>
             <input aria-label="Add a task to today" data-testid="input-quick-add" placeholder="Add a small thing to your list…" value={quickText} onChange={event => setQuickText(event.target.value)} />
@@ -401,8 +412,8 @@ function ScheduleEvent({ event }: { event: Event }) {
   return <div className="schedule-row" data-testid={`row-schedule-event-${event.id}`}><span className="time-label">{timeLabel(event.startTime)}</span><CategoryMark category={event.category} /><div className="item-main"><strong>{event.title}</strong><small>{event.category} · Event{event.endTime ? ` · until ${timeLabel(event.endTime)}` : ''}</small></div><CalendarDays size={16} color="hsl(var(--muted-foreground))" /></div>;
 }
 
-function ScheduleTask({ task, onToggle, onEdit }: { task: Task; onToggle: (id: string) => void; onEdit: (task: Task) => void }) {
-  return <div className="schedule-row" data-testid={`row-schedule-task-${task.id}`}><span className="time-label">{timeLabel(task.dueTime) || 'Anytime'}</span><CategoryMark category={task.category} /><div className="item-main"><strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong><small>{task.category} · Task</small></div><button className={`check-button ${task.completed ? 'checked' : ''}`} onClick={() => onToggle(task.id)} aria-label={`${task.completed ? 'Mark incomplete' : 'Complete'} ${task.title}`} data-testid={`button-toggle-${task.id}`}>{task.completed && <Check size={15} />}</button><button className="icon-button" onClick={() => onEdit(task)} aria-label={`Edit ${task.title}`} data-testid={`button-edit-${task.id}`}><Pencil size={15} /></button></div>;
+function ScheduleTask({ task, onToggle, onEdit }: { task: Task; onToggle: (id: string) => void; onEdit?: (task: Task) => void }) {
+  return <div className="schedule-row" data-testid={`row-schedule-task-${task.id}`}><span className="time-label">{timeLabel(task.dueTime) || 'Anytime'}</span><CategoryMark category={task.category} /><div className="item-main"><strong className={task.completed ? 'task-title done' : ''}>{task.title}</strong><small>{task.category} · Task</small></div><button className={`check-button ${task.completed ? 'checked' : ''}`} onClick={() => onToggle(task.id)} aria-label={`${task.completed ? 'Mark incomplete' : 'Complete'} ${task.title}`} data-testid={`button-toggle-${task.id}`}>{task.completed && <Check size={15} />}</button>{onEdit && <button className="icon-button" onClick={() => onEdit(task)} aria-label={`Edit ${task.title}`} data-testid={`button-edit-${task.id}`}><Pencil size={15} /></button>}</div>;
 }
 
 function CategoryMark({ category }: { category: Category }) {
@@ -476,7 +487,7 @@ function CalendarPage({ events, tasks, selectedDate, setSelectedDate, calendarVi
     <section className="panel" style={{ padding: 15 }}>
       <div className="calendar-head"><button className="icon-button" aria-label="Previous period" onClick={() => changePeriod(-1)} data-testid="button-calendar-previous"><ChevronLeft /></button><strong data-testid="text-calendar-period">{dateTitle}</strong><button className="icon-button" aria-label="Next period" onClick={() => changePeriod(1)} data-testid="button-calendar-next"><ChevronRight /></button></div>
       {calendarView === 'Month' && <div className="calendar-grid">{['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => <div className="calendar-weekday" key={`${day}-${index}`}>{day}</div>)}{monthDays.map(day => { const key = dateKey(day); const selected = key === selectedDate; return <button key={key} className={`calendar-day ${day.getMonth() === calendarMonth.getMonth() ? '' : 'outside'} ${key === todayKey() ? 'today' : ''} ${selected ? 'selected' : ''}`} onClick={() => setSelectedDate(key)} aria-label={formatDate(key)} aria-pressed={selected} data-testid={`calendar-day-${key}`}><span className="day-number">{day.getDate()}</span><span className="day-dots">{dotsFor(day).map((color, index) => <i key={`${color}-${index}`} className="day-dot" style={{ background: selected ? 'currentColor' : color }} />)}</span></button>; })}</div>}
-      {calendarView === 'Week' && <div className="week-grid">{weekDays.map(day => { const key = dateKey(day); return <button key={key} className={`week-day ${selectedDate === key ? 'selected' : ''}`} onClick={() => setSelectedDate(key)} data-testid={`calendar-week-day-${key}`}><strong>{day.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase()}</strong><span>{day.getDate()}</span><span className="day-dots">{dotsFor(day).map((color, index) => <i key={`${color}-${index}`} className="day-dot" style={{ background: selectedDate === key ? 'currentColor' : color }} />)}</span></button>; })}</div>}
+      {calendarView === 'Week' && <div className="week-grid">{weekDays.map(day => { const key = dateKey(day); return <button key={key} className={`week-day ${selectedDate === key ? 'selected' : ''}`} onClick={() => setSelectedDate(key)} data-testid={`calendar-week-day-${key}`}><strong>{day.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase()}</strong><span>{day.getDate()}</span><span className="day-dots">{dotsFor(day).map((color, index) => <i key={`${color}-${index}`} className="day-dot" style={{ background: color }} />)}</span></button>; })}</div>}
       {calendarView === 'Day' && <div className="calendar-day-focus"><div className="eyebrow" style={{ margin: '7px 0 4px', textAlign: 'center' }}>{dateFromKey(selectedDate).toLocaleDateString('en-US', { weekday: 'long' })}</div><div style={{ textAlign: 'center', font: '700 36px var(--display-font)' }}>{dateFromKey(selectedDate).getDate()}</div></div>}
     </section>
     <div className="section-heading"><h2>{formatDate(selectedDate, { weekday: 'long', month: 'long', day: 'numeric' })}</h2><button className="quiet-button" onClick={() => setSelectedDate(todayKey())} data-testid="button-calendar-today">Today</button></div>
@@ -521,6 +532,7 @@ function SettingsPage({ preferences, onChange, mediaAssets, mediaUrls, mediaStor
     </section>
     <section className="panel settings-group" style={{ marginTop: 12 }} data-testid="settings-layout">
       <h2>Layout</h2>
+      <div className="setting-row"><div><strong>Larger text</strong><small>Make planner details easier to read</small></div><button className={`switch ${preferences.largeText ? 'on' : ''}`} role="switch" aria-checked={preferences.largeText} aria-label="Larger text" onClick={() => change({ largeText: !preferences.largeText })} data-testid="switch-large-text" /></div>
       <div className="setting-row"><div><strong>Compact lists</strong><small>Bring your daily items a little closer together</small></div><button className={`switch ${preferences.compactMode ? 'on' : ''}`} role="switch" aria-checked={preferences.compactMode} aria-label="Compact lists" onClick={() => change({ compactMode: !preferences.compactMode })} data-testid="switch-compact-mode" /></div>
     </section>
     <section className="panel settings-group media-settings" data-testid="settings-media">

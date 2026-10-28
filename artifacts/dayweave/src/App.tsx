@@ -378,7 +378,7 @@ function App() {
       <CategoryMediaContext.Provider value={categoryArtwork}>
       <TimeFormatContext.Provider value={preferences.timeFormat}>
       <aside className="desktop-rail">
-        <div className="brand"><span className="brand-mark">{brandMarkUrl ? <img src={brandMarkUrl} alt="" /> : <CalendarDays size={18} />}</span>dayweave</div>
+        <div className="brand"><span className="brand-mark">{brandMarkUrl ? <img src={brandMarkUrl} alt="" /> : <CalendarDays size={18} />}</span>SpotPlanner</div>
         <nav className="rail-nav" aria-label="Main navigation">
           {NAV.map(({ id: page, label, icon: Icon }) => <button key={page} className={currentPage === page ? 'active' : ''} onClick={() => navigate(page)} data-testid={`nav-${page}`} aria-current={currentPage === page ? 'page' : undefined}><Icon />{label}</button>)}
         </nav>

@@ -1,6 +1,6 @@
 kind = "web"
 previewPath = "/"
-title = "Dayweave"
+title = "SpotPlanner"
 description = "An elegant, mobile-first personal planner for organizing daily tasks and events. Includes calendar and task management, local persistence, customizable themes, and a clearly labelled demo schedule assistant with review and approval."
 version = "1.0.0"
 id = "artifacts/dayweave"

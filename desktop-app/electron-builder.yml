@@ -1,0 +1,26 @@
+appId: com.cinderace.dayweave
+productName: Dayweave
+directories:
+  output: dist
+files:
+  - main.js
+  - preload.js
+  - app-dist/**/*
+  - package.json
+mac:
+  category: public.app-category.productivity
+  target:
+    - dmg
+  artifactName: Dayweave-${version}.dmg
+
+dmg:
+  title: Dayweave
+  backgroundColor: '#f56a00'
+  contents:
+    - x: 130
+      y: 220
+      type: file
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications

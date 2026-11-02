@@ -1,0 +1,22 @@
+{
+  "name": "dayweave-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "build:web": "pnpm --dir ../artifacts/dayweave build",
+    "prepare:app": "rm -rf app-dist && mkdir -p app-dist && cp -R ../artifacts/dayweave/dist/public app-dist/public",
+    "build": "pnpm run build:web && pnpm run prepare:app",
+    "package:mac": "pnpm run build && electron-builder --mac dmg",
+    "package:mac-arm64": "pnpm run build && electron-builder --mac --arm64",
+    "package:mac-universal": "pnpm run build && electron-builder --mac --universal",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "devDependencies": {
+    "electron": "^31.7.1",
+    "electron-builder": "^24.13.0"
+  }
+}

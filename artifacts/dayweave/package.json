@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "electron/main.js",
+  "main": "electron",
   "scripts": {
     "dev": "vite --config vite.config.ts --host 0.0.0.0",
     "build": "vite build --config vite.config.ts",
@@ -21,10 +21,11 @@
     },
     "files": [
       "dist/public/**/*",
-      "electron/**/*",
+      "electron",
       "package.json"
     ],
     "mac": {
+      "identity": null,
       "target": [
         "dmg",
         "zip"

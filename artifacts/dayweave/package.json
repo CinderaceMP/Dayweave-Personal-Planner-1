@@ -13,6 +13,30 @@
     "desktop:mac": "pnpm run build && electron-builder --mac --publish never",
     "desktop:mac:zip": "pnpm run build && electron-builder --mac zip --publish never"
   },
+  "build": {
+    "appId": "com.dayweave.app",
+    "productName": "Dayweave",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/public/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "dmg": {
+      "title": "Dayweave",
+      "artifactName": "Dayweave-${version}-mac-${arch}.dmg"
+    },
+    "asar": true
+  },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "^1.2.4",
